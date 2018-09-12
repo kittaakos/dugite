@@ -7,6 +7,7 @@
   "scripts": {
     "clean": "rimraf build",
     "build": "npm run clean && tsc -p ./tsconfig.json && tsc -p ./examples/tsconfig.json",
+    "watch": "npm run clean && tsc -w -p ./tsconfig.json",
     "prepare": "npm run build && npm run test",
     "postpublish": "git push --follow-tags",
     "test": "npm run test:fast && npm run test:slow && npm run test:external",
@@ -54,6 +55,7 @@
     "cross-env": "^5.1.1",
     "find-git-exec": "0.0.1-alpha.2",
     "mocha": "^4.0.1",
+    "node-ssh": "^5.1.2",
     "prettier": "^1.8.2",
     "temp": "^0.8.3",
     "ts-node": "^3.0.2",

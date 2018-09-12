@@ -80,6 +80,37 @@ export interface IGitExecutionOptions {
   readonly processCallback?: (process: ChildProcess) => void
 }
 
+export interface IGitExternalExecutionOptions {
+  /**
+   * An optional collection of key-value pairs which will be
+   * set as environment variables before executing the git
+   * process.
+   */
+  readonly env?: Object
+
+  /**
+   * An optional function that will execute the Git command.
+   * If not specified, then [`child_process.execFile`](https://nodejs.org/api/child_process.html#child_process_child_process_execfile_file_args_options_callback)
+   * will be called. If this function is defined, `processCallback` will be ignored at all.
+   */
+  readonly exec: IGitExternalExecutionOptions.ExecFunc
+}
+
+export namespace IGitExternalExecutionOptions {
+  export function is(options: any): options is IGitExternalExecutionOptions {
+    return !!options && 'exec' in options && typeof options.exec === 'function'
+  }
+}
+
+export namespace IGitExternalExecutionOptions {
+  export type ExecFunc = (
+    file: string,
+    args: string[],
+    options: { cwd?: string },
+    callback: (error: Error | null, stdout: string, stderr: string) => void
+  ) => any
+}
+
 /**
  * The errors coming from `execFile` have a `code` and we wanna get at that
  * without resorting to `any` casts.
@@ -142,12 +173,25 @@ export class GitProcess {
   public static exec(
     args: string[],
     path: string,
-    options?: IGitExecutionOptions
+    options?: IGitExecutionOptions | IGitExternalExecutionOptions
   ): Promise<IGitResult> {
     return new Promise<IGitResult>(function(resolve, reject) {
       let customEnv = {}
       if (options && options.env) {
         customEnv = options.env
+      }
+
+      if (
+        IGitExternalExecutionOptions.is(options) &&
+        (typeof process.env.LOCAL_GIT_DIRECTORY === 'undefined' ||
+          typeof process.env.GIT_EXEC_PATH === 'undefined')
+      ) {
+        reject(
+          new Error(
+            'LOCAL_GIT_DIRECTORY and GIT_EXEC_PATH must be specified when using an exec function.'
+          )
+        )
+        return
       }
 
       const { env, gitLocation } = setupEnvironment(customEnv)
@@ -160,11 +204,15 @@ export class GitProcess {
       const execOptions: ExecOptionsWithStringEncoding = {
         cwd: path,
         encoding: 'utf8',
-        maxBuffer: options ? options.maxBuffer : 10 * 1024 * 1024,
+        maxBuffer:
+          options && !IGitExternalExecutionOptions.is(options)
+            ? options.maxBuffer
+            : 10 * 1024 * 1024,
         env
       }
-
-      const spawnedProcess = execFile(gitLocation, args, execOptions, function(
+      const exec = IGitExternalExecutionOptions.is(options) ? options.exec : execFile
+      let spawnedProcess: ChildProcess | undefined = undefined
+      spawnedProcess = exec(gitLocation, args, execOptions, function(
         err: Error | null,
         stdout,
         stderr
@@ -226,15 +274,19 @@ export class GitProcess {
         }
       })
 
-      ignoreClosedInputStream(spawnedProcess)
+      if (spawnedProcess && !IGitExternalExecutionOptions.is(options)) {
+        ignoreClosedInputStream(spawnedProcess)
 
-      if (options && options.stdin !== undefined) {
-        // See https://github.com/nodejs/node/blob/7b5ffa46fe4d2868c1662694da06eb55ec744bde/test/parallel/test-stdin-pipe-large.js
-        spawnedProcess.stdin.end(options.stdin, options.stdinEncoding)
-      }
+        if (options && !IGitExternalExecutionOptions.is(options)) {
+          if (options.stdin !== undefined) {
+            // See https://github.com/nodejs/node/blob/7b5ffa46fe4d2868c1662694da06eb55ec744bde/test/parallel/test-stdin-pipe-large.js
+            spawnedProcess.stdin.end(options.stdin, options.stdinEncoding)
+          }
 
-      if (options && options.processCallback) {
-        options.processCallback(spawnedProcess)
+          if (options.processCallback) {
+            options.processCallback(spawnedProcess)
+          }
+        }
       }
     })
   }
@@ -273,7 +325,7 @@ export class GitProcess {
  * Since consumers of dugite using the `exec` api are unable to get
  * a hold of the stream until after we've written data to it they're
  * unable to fix it themselves so we'll just go ahead and ignore the
- * error for them. By supressing the stream error we can pick up on
+ * error for them. By suppressing the stream error we can pick up on
  * the real error when the process exits when we parse the exit code
  * and the standard error.
  *
